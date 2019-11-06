@@ -1,6 +1,6 @@
 use rowan_tools::{
-    lexer::{Base, Error},
-    rowan::SmolStr,
+    lexer::{self, Error, State},
+    rowan::TextUnit,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -24,60 +24,68 @@ impl From<Error> for TokenKind {
 }
 
 struct MathLexer<'a> {
-    base: Base<'a>,
+    state: State<'a>,
 }
 impl<'a> MathLexer<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
-            base: Base::new(input),
+            state: State::new(input),
         }
     }
 }
 impl<'a> Iterator for MathLexer<'a> {
-    type Item = (TokenKind, SmolStr);
+    type Item = (TokenKind, TextUnit);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.base.wrap(|base| match base.peek().unwrap() {
+        let result = lexer::wrap(self.state, |state| match state.peek().unwrap() {
             c if c.is_whitespace() => {
-                base.take_while(char::is_whitespace);
+                state.take_while(char::is_whitespace);
                 Ok(TokenKind::Whitespace)
             },
             c if c == '.' || c.is_digit(10) => {
-                base.take_while(|c| c.is_digit(10));
-                if base.take(".").any() {
-                    base.take_while(|c| c.is_digit(10)).at_least(1)?;
+                state.take_while(|c| c.is_digit(10));
+                if state.take(".").any() {
+                    state.take_while(|c| c.is_digit(10)).at_least(1)?;
                     Ok(TokenKind::Float)
                 } else {
                     Ok(TokenKind::Integer)
                 }
             },
             '+' => {
-                base.bump();
+                state.bump();
                 Ok(TokenKind::Add)
             },
             _ => {
-                base.bump();
+                state.bump();
                 Err(Error::UnexpectedInput)
             },
-        })
+        });
+        if let Some((_, len)) = result {
+            self.state.consume(len);
+        }
+        result
     }
+}
+
+fn tokenize(input: &'_ str) -> impl Iterator<Item = (TokenKind, &'_ str)> + '_ {
+    lexer::string_slices(input, MathLexer::new(input))
 }
 
 #[rustfmt::skip]
 fn main() {
-    let mut lexer = MathLexer::new("1 + 2.3 + 4. + .5");
-    assert_eq!(lexer.next(), Some((TokenKind::Integer,    SmolStr::new("1"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Add,        SmolStr::new("+"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Float,      SmolStr::new("2.3"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Add,        SmolStr::new("+"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Error,      SmolStr::new("4."))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Add,        SmolStr::new("+"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Float,      SmolStr::new(".5"))));
+    let mut lexer = tokenize("1 + 2.3 + 4. + .5");
+    assert_eq!(lexer.next(), Some((TokenKind::Integer,    "1")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Add,        "+")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Float,      "2.3")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Add,        "+")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Error,      "4.")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Add,        "+")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Float,      ".5")));
     assert_eq!(lexer.next(), None);
 }

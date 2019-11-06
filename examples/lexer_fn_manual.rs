@@ -1,7 +1,7 @@
 //! This example does not rely on rowan-tools, and is used in the
 //! README as an example for why you'd want to use rowan-tools.
 
-use rowan_tools::rowan::SmolStr;
+use rowan_tools::rowan::TextUnit;
 use std::iter;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -18,80 +18,77 @@ enum TokenKind {
     Integer,
 }
 
-fn lex(mut input: &'_ str) -> impl Iterator<Item = (TokenKind, SmolStr)> + '_ {
-    iter::from_fn(move || {
-        let first = match input.chars().next() {
-            Some(c) => c,
-            None => return None,
-        };
-        match first {
-            c if c.is_whitespace() => {
-                let ws = input
-                    .chars()
-                    .take_while(|c| c.is_whitespace())
-                    .map(char::len_utf8)
-                    .sum();
-                let string = SmolStr::new(&input[..ws]);
-                input = &input[ws..];
-                Some((TokenKind::Whitespace, string))
-            },
-            c if c == '.' || c.is_digit(10) => {
-                let mut consume = input
+fn lex(remaining: &'_ str) -> Option<(TokenKind, TextUnit)> {
+    let first = match remaining.chars().next() {
+        Some(c) => c,
+        None => return None,
+    };
+    match first {
+        c if c.is_whitespace() => {
+            let ws: TextUnit = remaining
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .map(TextUnit::of_char)
+                .sum();
+            Some((TokenKind::Whitespace, ws))
+        },
+        c if c == '.' || c.is_digit(10) => {
+            let mut consume: TextUnit = remaining
+                .chars()
+                .take_while(|c| c.is_digit(10))
+                .map(TextUnit::of_char)
+                .sum();
+            if remaining[consume.to_usize()..].starts_with(".") {
+                consume += TextUnit::of_str(".");
+                let trailing: TextUnit = remaining[consume.to_usize()..]
                     .chars()
                     .take_while(|c| c.is_digit(10))
-                    .map(char::len_utf8)
+                    .map(TextUnit::of_char)
                     .sum();
-                if input[consume..].starts_with(".") {
-                    consume += 1; // length of "."
-                    let trailing: usize = input[consume..]
-                        .chars()
-                        .take_while(|c| c.is_digit(10))
-                        .map(char::len_utf8)
-                        .sum();
-                    consume += trailing;
-                    let string = SmolStr::new(&input[..consume]);
-                    input = &input[consume..];
-                    if trailing == 0 {
-                        Some((TokenKind::Error, string))
-                    } else {
-                        Some((TokenKind::Float, string))
-                    }
+                consume += trailing;
+                if trailing == TextUnit::from(0) {
+                    Some((TokenKind::Error, consume))
                 } else {
-                    let string = SmolStr::new(&input[..consume]);
-                    input = &input[consume..];
-                    Some((TokenKind::Integer, string))
+                    Some((TokenKind::Float, consume))
                 }
-            },
-            '+' => {
-                let string = SmolStr::new(&input[..1]);
-                input = &input[1..];
-                Some((TokenKind::Add, string))
-            },
-            c => {
-                let len = c.len_utf8();
-                let string = SmolStr::new(&input[..len]);
-                input = &input[len..];
-                Some((TokenKind::Error, string))
-            },
-        }
+            } else {
+                Some((TokenKind::Integer, consume))
+            }
+        },
+        '+' => {
+            Some((TokenKind::Add, TextUnit::from(1)))
+        },
+        c => {
+            Some((TokenKind::Error, TextUnit::of_char(c)))
+        },
+    }
+}
+
+fn tokenize_str(input: &'_ str) -> impl Iterator<Item = (TokenKind, &str)> + '_ {
+    let mut remaining = input;
+    iter::from_fn(move || {
+        let (token, len) = lex(remaining)?;
+        let rem = &remaining[..len.to_usize()];
+        remaining = &remaining[len.to_usize()..];
+        Some((token, rem))
     })
 }
 
 #[rustfmt::skip]
 fn main() {
-    let mut lexer = lex("1 + 2.3 + 4. + .5");
-    assert_eq!(lexer.next(), Some((TokenKind::Integer,    SmolStr::new("1"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Add,        SmolStr::new("+"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Float,      SmolStr::new("2.3"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Add,        SmolStr::new("+"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Error,      SmolStr::new("4."))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Add,        SmolStr::new("+"))));
-    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, SmolStr::new(" "))));
-    assert_eq!(lexer.next(), Some((TokenKind::Float,      SmolStr::new(".5"))));
+    let mut lexer = tokenize_str("1 + 2.3 + 4. + .5");
+    assert_eq!(lexer.next(), Some((TokenKind::Integer,    "1")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Add,        "+")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Float,      "2.3")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Add,        "+")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Error,      "4.")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Add,        "+")));
+    assert_eq!(lexer.next(), Some((TokenKind::Whitespace, " ")));
+    assert_eq!(lexer.next(), Some((TokenKind::Float,      ".5")));
     assert_eq!(lexer.next(), None);
 }
